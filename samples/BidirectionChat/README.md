@@ -59,18 +59,77 @@ It's a quick try of this sample. You will create an Azure SignalR Service and an
         --name $storageName \
         --location $region \
         --resource-group $resourceGroup \
-        --sku Standard_LRS
+        --sku Standard_LRS \
+        --allow-shared-key-access false \
+        --allow-blob-public-access false
 
-        # Create a serverless function app in the resource group.
+        # Create a serverless function app in the resource group. For dotnet, looks it supports dotnet-isolated only.
         az functionapp create \
-        --name $functionAppName \
-        --storage-account $storageName \
-        --consumption-plan-location $region \
-        --resource-group $resourceGroup \
-        --functions-version 3
+        -g $resourceGroup \
+        -n $functionAppName \
+        -s $storageName \
+        --flexconsumption-location $region \
+        --runtime node \
+        --runtime-version 20 \
+        --instance-memory 512 \
+        --assign-identity \
+        --disable-app-insights true
+
+        # Function config set
+        az functionapp config appsettings set \
+            -g $resourceGroup \
+            -n $functionAppName \
+            --settings "AzureWebJobsStorage=UseManagedIdentity=true;AccountName=${storageName};EndpointSuffix=core.windows.net"
+
+        # Storage RBAC configure
+        # TODO: add yourself storage account role to be able to upload from local
+        IDENTITY_PRINCIPAL_ID=$(az functionapp identity show \
+            --name $functionAppName \
+            --resource-group $resourceGroup \
+            --query principalId -o tsv)
+
+        STORAGE_RESOURCE_ID=$(az storage account show \
+            --name $storageName \
+            --resource-group $resourceGroup \
+            --query id -o tsv)
+
+        az role assignment create \
+            --assignee $IDENTITY_PRINCIPAL_ID \
+            --role "Storage Blob Data Owner" \
+            --scope $STORAGE_RESOURCE_ID
         ```
 
     3. Publish the sample to the Azure Function you created before.
+    > [TODO] change the way to upload from local, sample:
+    > # Create Container
+    > az storage container create \
+    >   --account-name $storageName \
+    >   --name $container \
+    >   --auth-mode login
+    > 
+    > # Upload
+    > az storage blob upload \
+    >   --account-name $storageName \
+    >   --container-name $container \
+    >   --name $zipFile \
+    >   --file ../$zipFile \
+    >   --auth-mode login
+    > 
+    > # Get URL（may include SAS）
+    > blobUrl=$(az storage blob url \
+    >   --account-name $storageName \
+    >   --container-name $container \
+    >   --name $zipFile \
+    >   --auth-mode login -o tsv)
+    > 
+    > # Set WEBSITE_RUN_FROM_PACKAGE
+    > az functionapp config appsettings set \
+    >   -g $resourceGroup \
+    >   -n $functionApp \
+    >   --settings "WEBSITE_RUN_FROM_PACKAGE=$blobUrl"
+
+        # 重启 Function App
+        az functionapp restart -g $resourceGroup -n $functionAppName
 
         ```bash
         cd <root>/samples/BidirectionChat/csharp
